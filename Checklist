@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Renovation Recordkeeping Checklist</title>
+
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║        SALESFORCE / FIELD SERVICE INTEGRATION GUIDE             ║
+  ╠══════════════════════════════════════════════════════════════════╣
+  ║                                                                  ║
+  ║  OPTION A — Salesforce Experience Cloud (recommended)           ║
+  ║    Deploy this as a Lightning Web Component (LWC) or            ║
+  ║    embed as a Visualforce page. Replace the JS config           ║
+  ║    block below with @wire adapters to pull Work Order data.     ║
+  ║                                                                  ║
+  ║  OPTION B — Field Service Mobile (standalone)                   ║
+  ║    Host this HTML file and open it via a Custom Action          ║
+  ║    on the Work Order or Service Appointment object.             ║
+  ║    Pass record data via URL parameters (see CONFIG below).      ║
+  ║                                                                  ║
+  ║  OPTION C — Connected App / REST API                            ║
+  ║    Use the SF REST API with OAuth 2.0 to pull/push data.        ║
+  ║    Replace the stub functions in the SALESFORCE API section.    ║
+  ║                                                                  ║
+  ║  KEY OBJECTS TO MAP:                                             ║
+  ║    Work Order        → Job info, description, location          ║
+  ║    Service Resource  → Assigned renovator, workers              ║
+  ║    Service Appointment → Date, location                         ║
+  ║    ContentVersion    → Save completed PDF back to record        ║
+  ║                                                                  ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+
+<!--
+  ── GOOGLE PLACES ──────────────────────────────────────────────────
+  Replace the key below with your own Google Places API key.
+  To disable autocomplete, remove this script tag entirely.
+  ───────────────────────────────────────────────────────────────── -->
+
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAF07nLZEjPvaZfOVDtqAvfCh3qSX2Ssl8&libraries=places"></script>
+
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --brand: #6b6b5a;
+  --brand-light: #8a8a76;
+  --text: #1a1a1a;
+  --sub: #555;
+  --border: #bbb;
+  --bg: #f5f5f0;
+  --focus-bg: #eef3ff;
+  --accent: #3a6fd8;
+  --check: 22px;
+}
+html { font-size: 15px; }
+body { font-family: 'Segoe UI', Helvetica, Arial, sans-serif; background: #e0ddd6; color: var(--text); min-height: 100vh; }
+
+/* ── STATUS BANNER (Salesforce connection indicator) ── */
+.sf-banner {
+  display: none; /* shown by JS when SF connected */
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+.sf-banner.connected { background: #d4edda; color: #155724; display: block; }
+.sf-banner.error { background: #f8d7da; color: #721c24; display: block; }
+.sf-banner.loading { background: #fff3cd; color: #856404; display: block; }
+
+/* ── TOP BAR ── */
+.top-bar {
+  background: var(--brand); color: white;
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 15px; position: sticky; top: 0; z-index: 20;
+  box-shadow: 0 2px 8px rgba(0,0,0,.3);
+}
+.pella-badge { border: 2px solid rgba(255,255,255,.8); padding: 2px 8px; font-style: italic; font-size: 16px; font-weight: bold; border-radius: 2px; flex-shrink: 0; }
+.top-bar h1 { font-size: 14px; font-weight: 600; line-height: 1.3; flex: 1; }
+.sf-indicator { font-size: 11px; background: rgba(255,255,255,.2); border-radius: 4px; padding: 3px 8px; white-space: nowrap; }
+
+/* ── CARDS ── */
+.card { background: white; margin: 11px 10px; border-radius: 10px; padding: 15px 14px; box-shadow: 0 1px 5px rgba(0,0,0,.1); }
+.card-title { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .9px; color: var(--brand); margin-bottom: 12px; padding-bottom: 6px; border-bottom: 2px solid var(--brand); }
+
+/* ── FIELDS ── */
+.field { margin-bottom: 11px; }
+.field label { display: block; font-size: 11px; font-weight: 600; color: var(--sub); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .4px; }
+.field input[type=text], .field input[type=date], .field textarea {
+  width: 100%; border: 1.5px solid var(--border); border-radius: 6px;
+  padding: 10px 11px; font-size: 15px; font-family: inherit;
+  background: var(--bg); color: var(--text); outline: none; -webkit-appearance: none;
+  transition: border-color .15s, background .15s;
+}
+.field input:focus, .field textarea:focus { border-color: var(--accent); background: var(--focus-bg); }
+.field input[readonly] { background: #ececea; color: #333; font-weight: 600; border-color: #ccc; }
+.field textarea { resize: vertical; min-height: 70px; }
+/* Salesforce-populated fields get a subtle teal left border */
+.field input.sf-populated { border-left: 3px solid #0070d2; background: #f0f8ff; }
+
+/* ── CHECKBOXES ── */
+.chk { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; border-bottom: 1px solid #f0f0ec; cursor: pointer; }
+.chk:last-child { border-bottom: none; }
+.chk input[type=checkbox] { width: var(--check); height: var(--check); min-width: var(--check); accent-color: var(--brand); cursor: pointer; margin-top: 1px; flex-shrink: 0; }
+.chk label { font-size: 14px; line-height: 1.45; cursor: pointer; flex: 1; }
+.sub { background: #f7f7f3; border-radius: 8px; padding: 4px 12px; margin: 4px 0; border-left: 3px solid var(--brand-light); }
+.sub .chk { padding: 8px 0; }
+
+/* ── SIGNATURE ── */
+.sig-lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--sub); margin-bottom: 5px; }
+.sig-wrap { border: 1.5px solid var(--border); border-radius: 8px; background: #fafaf8; overflow: hidden; touch-action: none; }
+#sigCanvas { display: block; width: 100%; height: 110px; cursor: crosshair; touch-action: none; }
+.sig-hint { text-align: center; font-size: 11px; color: #aaa; margin-top: 4px; }
+.btn-sm { margin-top: 7px; padding: 8px 16px; font-size: 13px; background: #f0f0ec; border: 1px solid #ccc; border-radius: 6px; cursor: pointer; font-family: inherit; color: #444; }
+
+/* ── ACTION BAR ── */
+.action-bar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--brand); padding: 10px 12px; display: flex; gap: 10px; z-index: 30; }
+.btn-primary { flex: 1; background: white; color: var(--brand); border: none; padding: 11px; font-size: 14px; font-weight: 700; border-radius: 7px; cursor: pointer; font-family: inherit; }
+.btn-sf { flex: 1; background: #0070d2; color: white; border: none; padding: 11px; font-size: 13px; font-weight: 700; border-radius: 7px; cursor: pointer; font-family: inherit; display: none; }
+/* Show SF save button when SF is configured */
+.sf-enabled .btn-sf { display: block; }
+
+/* ══════════════════════════════════════════
+   PRINT / DOCUMENT VIEW
+══════════════════════════════════════════ */
+#printView { display: none; background: white; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #000; }
+
+.doc-header { background: #6b6b5a; color: white; display: flex; align-items: center; gap: 14px; padding: 10px 18px; }
+.doc-logo { border: 2px solid white; padding: 3px 9px; font-style: italic; font-size: 17px; font-weight: bold; }
+.doc-header h2 { font-size: 20px; font-weight: normal; letter-spacing: .3px; }
+.doc-body { padding: 18px 24px 12px; }
+
+.doc-field { display: flex; align-items: flex-end; margin-bottom: 8px; gap: 5px; font-size: 11px; }
+.doc-field-label { white-space: nowrap; }
+.doc-field-line { flex: 1; border-bottom: 1px solid #333; min-height: 16px; padding-bottom: 1px; font-size: 11px; padding-left: 4px; }
+
+hr.doc-hr { border: none; border-top: 1px solid #ccc; margin: 10px 0; }
+
+.doc-chk { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 5px; font-size: 11px; line-height: 1.4; }
+.doc-box { width: 11px; height: 11px; min-width: 11px; border: 1px solid #555; display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; font-size: 9px; font-weight: bold; flex-shrink: 0; }
+.doc-box.checked { background: #000; color: white; }
+
+.doc-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-left: 16px; margin-top: 4px; }
+.doc-sub { margin-left: 16px; margin-top: 3px; }
+.doc-verify { border: 1px solid #aaa; min-height: 32px; padding: 3px 5px; font-size: 10.5px; margin-left: 16px; margin-top: 3px; width: calc(100% - 16px); white-space: pre-wrap; }
+
+.doc-sig-row { display: flex; gap: 20px; align-items: flex-end; margin-top: 18px; border-top: 1px solid #999; padding-top: 12px; }
+.doc-sig-box { flex: 2; }
+.doc-sig-label { font-size: 10px; color: #555; margin-bottom: 3px; }
+.doc-sig-img { border: 1px solid #aaa; height: 60px; width: 100%; display: block; object-fit: contain; }
+.doc-right-fields { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+.doc-right-field { border-bottom: 1px solid #333; font-size: 11px; padding-bottom: 2px; padding-left: 3px; min-height: 16px; }
+.doc-right-field-lbl { font-size: 10px; color: #555; margin-bottom: 2px; }
+
+.doc-footer { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 14px; padding-top: 8px; border-top: 1px solid #ddd; }
+.doc-epa { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #2a5a96; font-weight: bold; }
+.doc-epa-badge { background: #2a5a96; color: white; font-size: 12px; font-weight: bold; padding: 2px 6px; border-radius: 2px; }
+.doc-pella { text-align: right; font-size: 9px; color: #888; }
+.doc-pella-logo { font-style: italic; font-size: 12px; font-weight: bold; color: #6b6b5a; border: 1px solid #6b6b5a; padding: 1px 6px; display: inline-block; margin-bottom: 2px; }
+
+.back-bar { background: var(--brand); padding: 10px 14px; display: flex; gap: 10px; }
+.btn-back { flex: 1; background: white; color: var(--brand); border: none; padding: 10px; font-size: 14px; font-weight: 700; border-radius: 7px; cursor: pointer; font-family: inherit; }
+.btn-print { flex: 1; background: #333; color: white; border: none; padding: 10px; font-size: 14px; font-weight: 700; border-radius: 7px; cursor: pointer; font-family: inherit; }
+.btn-sf-save { flex: 1; background: #0070d2; color: white; border: none; padding: 10px; font-size: 13px; font-weight: 700; border-radius: 7px; cursor: pointer; font-family: inherit; display: none; }
+.sf-enabled .btn-sf-save { display: block; }
+
+@media print {
+  #formView, .back-bar { display: none !important; }
+  #printView { display: block !important; }
+  body { background: white; }
+}
+</style>
+
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SALESFORCE CONNECTION STATUS BANNER
+     Shown/hidden automatically by JS below
+══════════════════════════════════════════════════════════════ -->
+
+<div class="sf-banner" id="sfBanner"></div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     MOBILE FORM VIEW
+══════════════════════════════════════════════════════════════ -->
+
+<div id="formView" style="padding-bottom:70px;">
+
+  <div class="top-bar">
+    <div class="pella-badge">Pella</div>
+    <h1>Renovation Recordkeeping Checklist</h1>
+    <div class="sf-indicator" id="sfIndicator" style="display:none;">⚡ SF</div>
+  </div>
+
+  <!-- JOB INFORMATION
+       ─────────────────────────────────────────────────────────
+       SALESFORCE MAPPING:
+         f_firm     → Work Order: Account.Name  (or custom field)
+         f_date     → Service Appointment: SchedStartTime
+         f_loc      → Work Order: Street / City / State  (or Site)
+         f_desc     → Work Order: Description
+         f_renov    → Service Resource: Name (assigned resource)
+         f_workers  → Additional Service Resources on Work Order
+         f_tech     → Custom field: Dust_Sampling_Technician__c
+       ───────────────────────────────────────────────────────── -->
+
+  <div class="card">
+    <div class="card-title">Job Information</div>
+    <div class="field"><label>Name of Firm</label><input id="f_firm" type="text" placeholder="Company / firm name"></div>
+    <div class="field"><label>Date of Renovation</label><input id="f_date" type="date"></div>
+    <div class="field"><label>Location of Renovation</label><input id="f_loc" type="text" placeholder="Start typing address..." autocomplete="off"></div>
+    <div class="field"><label>Brief Description of Renovation</label><input id="f_desc" type="text" placeholder=""></div>
+    <div class="field"><label>Name of Assigned Renovator</label><input id="f_renov" type="text" placeholder=""></div>
+    <div class="field"><label>Name(s) of Trained Worker(s), if used</label><input id="f_workers" type="text" placeholder=""></div>
+    <div class="field"><label>Dust-Sampling Technician / Inspector / Risk Assessor, if used</label><input id="f_tech" type="text" placeholder=""></div>
+  </div>
+
+  <!-- QUALIFICATIONS & TRAINING -->
+
+  <div class="card">
+    <div class="card-title">Qualifications &amp; Training</div>
+    <div class="chk"><input type="checkbox" id="c1"><label for="c1">Copies of renovator and dust-sampling technician qualifications (training certificates, certifications) on file</label></div>
+    <div class="chk"><input type="checkbox" id="c2"><label for="c2">Certified renovator provided training to workers on (check all that apply):</label></div>
+    <div class="sub">
+      <div class="chk"><input type="checkbox" id="c2a"><label for="c2a">Posting warning signs</label></div>
+      <div class="chk"><input type="checkbox" id="c2b"><label for="c2b">Setting up plastic containment barriers</label></div>
+      <div class="chk"><input type="checkbox" id="c2c"><label for="c2c">Maintaining containment</label></div>
+      <div class="chk"><input type="checkbox" id="c2d"><label for="c2d">Avoiding spread of dust to adjacent areas</label></div>
+      <div class="chk"><input type="checkbox" id="c2e"><label for="c2e">Waste handling</label></div>
+      <div class="chk"><input type="checkbox" id="c2f"><label for="c2f">Post-renovation cleaning</label></div>
+    </div>
+    <div class="chk"><input type="checkbox" id="c3"><label for="c3">Copy of the "Test Kit Documentation Form" provided to the property owner/occupant</label></div>
+    <div class="chk"><input type="checkbox" id="c4"><label for="c4">Warning signs posted at entrance to work area</label></div>
+  </div>
+
+  <!-- CONTAINMENT -->
+
+  <div class="card">
+    <div class="card-title">Work Area Containment</div>
+    <div class="chk"><input type="checkbox" id="c5"><label for="c5">Work area contained to prevent spread of dust and debris</label></div>
+    <div class="sub">
+      <div class="chk"><input type="checkbox" id="c5a"><label for="c5a">All objects in the work area removed or covered (interiors)</label></div>
+      <div class="chk"><input type="checkbox" id="c5b"><label for="c5b">HVAC ducts in the work area closed and covered (interiors)</label></div>
+      <div class="chk"><input type="checkbox" id="c5c"><label for="c5c">Windows in the work area closed (interiors)</label></div>
+      <div class="chk"><input type="checkbox" id="c5d"><label for="c5d">Windows in and within 20 feet of the work area closed (exteriors)</label></div>
+      <div class="chk"><input type="checkbox" id="c5e"><label for="c5e">Doors in the work area closed and sealed (interiors)</label></div>
+      <div class="chk"><input type="checkbox" id="c5f"><label for="c5f">Doors in and within 20 feet of the work area closed and sealed (exteriors)</label></div>
+      <div class="chk"><input type="checkbox" id="c5g"><label for="c5g">Doors that must be used in the work area covered to allow passage but prevent spread of dust</label></div>
+      <div class="chk"><input type="checkbox" id="c5h"><label for="c5h">Floors in the work area covered with taped-down plastic (interiors)</label></div>
+      <div class="chk"><input type="checkbox" id="c5i"><label for="c5i">Ground covered by plastic extending 10 feet from the work area; plastic anchored to building and weighed down by heavy objects (exteriors)</label></div>
+      <div class="chk"><input type="checkbox" id="c5j"><label for="c5j">If necessary, vertical containment installed to prevent migration of dust and debris to adjacent property (exteriors)</label></div>
+    </div>
+    <div class="chk"><input type="checkbox" id="c6"><label for="c6">Waste contained on-site and while being transported off-site</label></div>
+  </div>
+
+  <!-- CLEANING -->
+
+  <div class="card">
+    <div class="card-title">Post-Renovation Cleaning</div>
+    <div class="chk"><input type="checkbox" id="c7"><label for="c7">Work site properly cleaned after renovation</label></div>
+    <div class="sub">
+      <div class="chk"><input type="checkbox" id="c7a"><label for="c7a">All chips and debris picked up; protective sheeting misted, folded dirty side inward, and taped for removal</label></div>
+      <div class="chk"><input type="checkbox" id="c7b"><label for="c7b">Work area surfaces and objects cleaned using HEPA vacuum and/or wet cloths or mops (interiors)</label></div>
+    </div>
+    <div class="chk"><input type="checkbox" id="c8"><label for="c8">Certified renovator performed post-renovation cleaning verification (describe results, including the number of wet and dry cloths used):</label></div>
+    <div class="field" style="margin-left:34px; margin-top:4px;">
+      <textarea id="f_verify" placeholder="Describe results here..."></textarea>
+    </div>
+    <div class="chk"><input type="checkbox" id="c9"><label for="c9">If dust clearance testing was performed instead, attach a copy of report.</label></div>
+  </div>
+
+  <!-- CERTIFICATION & SIGNATURE -->
+
+  <div class="card">
+    <div class="card-title">Certification &amp; Signature</div>
+    <div class="chk"><input type="checkbox" id="c10"><label for="c10">I certify under penalty of law that the above information is true and complete.</label></div>
+    <div class="field" style="margin-top:10px;"><label>Signature Date</label><input id="f_sigdate" type="date"></div>
+    <div class="field"><label>Name and Title</label><input id="f_nametitle" type="text" placeholder=""></div>
+    <div class="sig-lbl">Signature — draw with finger</div>
+    <div class="sig-wrap"><canvas id="sigCanvas"></canvas></div>
+    <p class="sig-hint">Draw above with your finger</p>
+    <button class="btn-sm" onclick="clearSig()">✕ Clear Signature</button>
+  </div>
+
+  <div class="action-bar">
+    <button class="btn-primary" onclick="showPreview()">👁 Preview &amp; Print</button>
+    <!--
+      SALESFORCE: "Save to Salesforce" button — hidden by default.
+      Set SF_CONFIG.enabled = true below to show this button.
+      On click it calls sfSaveRecord() which you implement below.
+    -->
+    <button class="btn-sf" id="btnSfSave" onclick="sfSaveRecord()">☁ Save to Salesforce</button>
+  </div>
+
+</div><!-- /formView -->
+
+<!-- ══════════════════════════════════════════════════════════════
+     PRINT / DOCUMENT VIEW  (original Pella layout)
+══════════════════════════════════════════════════════════════ -->
+
+<div id="printView">
+
+  <div class="back-bar">
+    <button class="btn-back" onclick="showForm()">← Back</button>
+    <button class="btn-print" onclick="window.print()">🖨 Print / PDF</button>
+    <!--
+      SALESFORCE: Save PDF as ContentVersion (File) attached to the Work Order.
+      Implement sfSavePDF() below, then set display:block on this button.
+    -->
+    <button class="btn-sf-save" id="btnSfPdf" onclick="sfSavePDF()">☁ Save PDF to SF</button>
+  </div>
+
+  <div class="doc-header">
+    <div class="doc-logo">Pella</div>
+    <h2>Renovation Recordkeeping Checklist</h2>
+  </div>
+
+  <div class="doc-body">
+    <div class="doc-field"><span class="doc-field-label">Name of Firm:</span><div class="doc-field-line" id="d_firm"></div></div>
+    <div class="doc-field"><span class="doc-field-label">Date and Location of Renovation:</span><div class="doc-field-line" id="d_dateloc"></div></div>
+    <div class="doc-field"><span class="doc-field-label">Brief Description of Renovation:</span><div class="doc-field-line" id="d_desc"></div></div>
+    <div class="doc-field"><span class="doc-field-label">Name of Assigned Renovator:</span><div class="doc-field-line" id="d_renov"></div></div>
+    <div class="doc-field"><span class="doc-field-label">Name(s) of Trained Worker(s), if used:</span><div class="doc-field-line" id="d_workers"></div></div>
+    <div class="doc-field"><span class="doc-field-label">Name of Dust-Sampling Technician, Inspector or Risk Assessor, if used:</span><div class="doc-field-line" id="d_tech"></div></div>
+
+```
+<hr class="doc-hr">
+
+<div class="doc-chk"><span class="doc-box" id="d_c1"></span><span>Copies of renovator and dust-sampling technician qualifications (training certificates, certifications) on file</span></div>
+<div class="doc-chk"><span class="doc-box" id="d_c2"></span><span>Certified renovator provided training to workers on (check all that apply):</span></div>
+<div class="doc-two-col">
+  <div class="doc-chk"><span class="doc-box" id="d_c2a"></span><span>Posting warning signs</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c2b"></span><span>Setting up plastic containment barriers</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c2c"></span><span>Maintaining containment</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c2d"></span><span>Avoiding spread of dust to adjacent areas</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c2e"></span><span>Waste handling</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c2f"></span><span>Post-renovation cleaning</span></div>
+</div>
+
+<hr class="doc-hr">
+
+<div class="doc-chk"><span class="doc-box" id="d_c3"></span><span>Copy of the "Test Kit Documentation Form" provided to the property owner/occupant</span></div>
+<div class="doc-chk"><span class="doc-box" id="d_c4"></span><span>Warning signs posted at entrance to work area</span></div>
+
+<hr class="doc-hr">
+
+<div class="doc-chk"><span class="doc-box" id="d_c5"></span><span>Work area contained to prevent spread of dust and debris</span></div>
+<div class="doc-two-col">
+  <div class="doc-chk"><span class="doc-box" id="d_c5a"></span><span>All objects in the work area removed or covered (interiors)</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5f"></span><span>Doors in and within 20 feet of the work area closed and sealed (exteriors)</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5b"></span><span>HVAC ducts in the work area closed and covered (interiors)</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5g"></span><span>Doors that must be used in the work area covered to allow passage but prevent spread of dust</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5c"></span><span>Windows in the work area closed (interiors)</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5h"></span><span>Floors in the work area covered with taped-down plastic (interiors)</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5d"></span><span>Windows in and within 20 feet of the work area closed (exteriors)</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5i"></span><span>Ground covered by plastic extending 10 feet from the work area; plastic anchored to building and weighed down by heavy objects (exteriors)</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5e"></span><span>Doors in the work area closed and sealed (interiors)</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c5j"></span><span>If necessary, vertical containment installed to prevent migration of dust and debris to adjacent property (exteriors)</span></div>
+</div>
+
+<hr class="doc-hr">
+
+<div class="doc-chk"><span class="doc-box" id="d_c6"></span><span>Waste contained on-site and while being transported off-site</span></div>
+
+<hr class="doc-hr">
+
+<div class="doc-chk"><span class="doc-box" id="d_c7"></span><span>Work site properly cleaned after renovation</span></div>
+<div class="doc-sub">
+  <div class="doc-chk"><span class="doc-box" id="d_c7a"></span><span>All chips and debris picked up; protective sheeting misted, folded dirty side inward, and taped for removal</span></div>
+  <div class="doc-chk"><span class="doc-box" id="d_c7b"></span><span>Work area surfaces and objects cleaned using HEPA vacuum and/or wet cloths or mops (interiors)</span></div>
+</div>
+
+<hr class="doc-hr">
+
+<div class="doc-chk"><span class="doc-box" id="d_c8"></span><span>Certified renovator performed post-renovation cleaning verification (describe results, including the number of wet and dry cloths used):</span></div>
+<div class="doc-verify" id="d_verify"></div>
+
+<hr class="doc-hr">
+
+<div class="doc-chk"><span class="doc-box" id="d_c9"></span><span>If dust clearance testing was performed instead, attach a copy of report.</span></div>
+
+<hr class="doc-hr">
+
+<div class="doc-chk"><span class="doc-box" id="d_c10"></span><span>I certify under penalty of law that the above information is true and complete.</span></div>
+
+<div class="doc-sig-row">
+  <div class="doc-sig-box">
+    <div class="doc-sig-label">Signature</div>
+    <img id="d_sig" class="doc-sig-img" src="" alt="">
+  </div>
+  <div class="doc-right-fields">
+    <div><div class="doc-right-field-lbl">Date</div><div class="doc-right-field" id="d_sigdate"></div></div>
+    <div><div class="doc-right-field-lbl">Name and Title</div><div class="doc-right-field" id="d_nametitle"></div></div>
+  </div>
+</div>
+
+<div class="doc-footer">
+  <div class="doc-epa">
+    <div class="doc-epa-badge">EPA</div>
+    <div>United States<br>Environmental Protection Agency</div>
+  </div>
+  <div class="doc-pella">
+    <div class="doc-pella-logo">Pella</div><br>
+    VIEWED TO BE THE BEST®<br>
+    © 2010 Pella Corporation &nbsp; EPACL0610
+  </div>
+</div>
+```
+
+  </div>
+</div><!-- /printView -->
+
+<script>
+/* ╔══════════════════════════════════════════════════════════════════╗
+   ║              SALESFORCE CONFIGURATION                           ║
+   ║                                                                  ║
+   ║  Set enabled: true and fill in your org details to activate     ║
+   ║  the Salesforce features. A Salesforce admin/developer will     ║
+   ║  need to:                                                        ║
+   ║    1. Create a Connected App with OAuth in your SF org          ║
+   ║    2. Set instanceUrl to your org's My Domain URL               ║
+   ║    3. Implement the auth flow (see sfAuthenticate below)        ║
+   ║    4. Map field IDs to your Work Order / custom object fields   ║
+   ╚══════════════════════════════════════════════════════════════════╝ */
+const SF_CONFIG = {
+  enabled: false,                          // ← SET TO true TO ACTIVATE
+
+  instanceUrl: 'https://yourorg.my.salesforce.com',  // ← YOUR SF ORG URL
+  apiVersion: 'v59.0',                     // ← UPDATE TO CURRENT API VERSION
+
+  // OAuth / Session token — populate this after your auth flow
+  // In a Visualforce page use: '{!$Api.Session_ID}'
+  // In LWC use the wire adapter or @salesforce/apex
+  accessToken: '',                         // ← POPULATE FROM AUTH FLOW
+
+  // Salesforce object + field API names to populate the form
+  // These are examples — update to match your org's schema
+  fieldMap: {
+    f_firm:    'Account.Name',             // Work Order → Account Name
+    f_date:    'ServiceAppointment.SchedStartTime',
+    f_loc:     'WorkOrder.Street',         // or Site__c, Location__c
+    f_desc:    'WorkOrder.Description',
+    f_renov:   'ServiceResource.Name',     // Primary assigned resource
+    f_workers: 'WorkOrder.Assigned_Workers__c',   // Custom field example
+    f_tech:    'WorkOrder.Dust_Technician__c',    // Custom field example
+  },
+
+  // Work Order record ID — pass via URL param ?workOrderId=XXXX
+  // or hardcode for testing: workOrderId: '0WO000000000001'
+  workOrderId: new URLSearchParams(window.location.search).get('workOrderId') || '',
+
+  // Custom object to save checklist results back to SF (optional)
+  // Create a custom object e.g. Renovation_Checklist__c with fields
+  // matching the checkboxes below, then set this to the API name
+  checklistObject: 'Renovation_Checklist__c',   // ← Your custom object API name
+};
+
+
+/* ╔══════════════════════════════════════════════════════════════════╗
+   ║           SALESFORCE API FUNCTIONS                              ║
+   ║  Implement these functions to connect to your SF org.           ║
+   ║  A Salesforce developer should replace the stub bodies.         ║
+   ╚══════════════════════════════════════════════════════════════════╝ */
+
+/**
+ * STEP 1 — AUTHENTICATION
+ * Call this on page load to get an access token.
+ * Options: OAuth 2.0 Web Server Flow, User-Agent Flow, or
+ * if embedded in SF, use the session ID directly.
+ *
+ * SALESFORCE DEVELOPER: Replace this stub with your auth flow.
+ */
+async function sfAuthenticate() {
+  // ── STUB: Replace with real OAuth or session-based auth ──────────
+  // Example for Visualforce (token already available):
+  //   SF_CONFIG.accessToken = '{!$Api.Session_ID}';
+  //   return true;
+  //
+  // Example for Connected App OAuth (redirect flow):
+  //   window.location = SF_CONFIG.instanceUrl +
+  //     '/services/oauth2/authorize?response_type=token' +
+  //     '&client_id=YOUR_CONSUMER_KEY' +
+  //     '&redirect_uri=' + encodeURIComponent(window.location.href);
+  // ─────────────────────────────────────────────────────────────────
+  console.log('[SF] sfAuthenticate() — not yet implemented');
+  return false;
+}
+
+/**
+ * STEP 2 — LOAD WORK ORDER DATA
+ * Fetches the Work Order record and populates form fields.
+ * Called automatically on page load when SF_CONFIG.enabled = true.
+ *
+ * SALESFORCE DEVELOPER: Update the SOQL query and field mappings.
+ */
+async function sfLoadWorkOrder() {
+  if (!SF_CONFIG.workOrderId) {
+    sfShowBanner('No Work Order ID provided. Fill in manually.', 'error');
+    return;
+  }
+  sfShowBanner('Loading job data from Salesforce…', 'loading');
+  try {
+    // ── STUB: Replace with real REST API call ────────────────────────
+    // const query = encodeURIComponent(
+    //   `SELECT Id, Description, Street, Account.Name,
+    //           Dust_Technician__c, Assigned_Workers__c
+    //    FROM WorkOrder WHERE Id = '${SF_CONFIG.workOrderId}'`
+    // );
+    // const res = await fetch(
+    //   `${SF_CONFIG.instanceUrl}/services/data/${SF_CONFIG.apiVersion}/query?q=${query}`,
+    //   { headers: { Authorization: `Bearer ${SF_CONFIG.accessToken}` } }
+    // );
+    // const data = await res.json();
+    // const wo = data.records[0];
+    // populateField('f_firm',    wo['Account']?.['Name']);
+    // populateField('f_desc',    wo['Description']);
+    // populateField('f_loc',     wo['Street']);
+    // populateField('f_tech',    wo['Dust_Technician__c']);
+    // populateField('f_workers', wo['Assigned_Workers__c']);
+    // sfShowBanner('✓ Job data loaded from Salesforce', 'connected');
+    // ─────────────────────────────────────────────────────────────────
+    console.log('[SF] sfLoadWorkOrder() — not yet implemented');
+    sfShowBanner('SF load stub called — implement sfLoadWorkOrder()', 'error');
+  } catch (err) {
+    sfShowBanner('Error loading Salesforce data: ' + err.message, 'error');
+  }
+}
+
+/**
+ * STEP 3 — SAVE CHECKLIST BACK TO SALESFORCE
+ * Creates or updates a Renovation_Checklist__c record linked to the Work Order.
+ * Triggered by the "Save to Salesforce" button.
+ *
+ * SALESFORCE DEVELOPER: Map checkboxes to your custom object fields.
+ */
+async function sfSaveRecord() {
+  sfShowBanner('Saving to Salesforce…', 'loading');
+  try {
+    const payload = collectFormData();
+    // ── STUB: Replace with real REST API call ────────────────────────
+    // const body = {
+    //   WorkOrder__c:           SF_CONFIG.workOrderId,
+    //   Firm_Name__c:           payload.firm,
+    //   Renovation_Date__c:     payload.date,
+    //   Location__c:            payload.loc,
+    //   Description__c:         payload.desc,
+    //   Renovator__c:           payload.renov,
+    //   Qualifications_OnFile__c: payload.checks.c1,
+    //   Training_Provided__c:   payload.checks.c2,
+    //   // ... map remaining checkboxes to custom fields ...
+    //   Verified_By__c:         payload.nametitle,
+    //   Verification_Notes__c:  payload.verify,
+    //   Certified__c:           payload.checks.c10,
+    // };
+    // const res = await fetch(
+    //   `${SF_CONFIG.instanceUrl}/services/data/${SF_CONFIG.apiVersion}/sobjects/${SF_CONFIG.checklistObject}/`,
+    //   {
+    //     method: 'POST',
+    //     headers: {
+    //       Authorization: `Bearer ${SF_CONFIG.accessToken}`,
+    //       'Content-Type': 'application/json'
+    //     },
+    //     body: JSON.stringify(body)
+    //   }
+    // );
+    // const result = await res.json();
+    // sfShowBanner('✓ Saved to Salesforce (ID: ' + result.id + ')', 'connected');
+    // ─────────────────────────────────────────────────────────────────
+    console.log('[SF] sfSaveRecord() — payload ready:', payload);
+    sfShowBanner('SF save stub called — implement sfSaveRecord()', 'error');
+  } catch (err) {
+    sfShowBanner('Error saving to Salesforce: ' + err.message, 'error');
+  }
+}
+
+/**
+ * STEP 4 — SAVE COMPLETED PDF TO SALESFORCE FILES
+ * Attaches the completed document as a ContentVersion on the Work Order.
+ * Triggered by "Save PDF to SF" button in the print view.
+ *
+ * SALESFORCE DEVELOPER: This uses html2canvas/jsPDF or you can
+ * send the raw HTML to a server-side Apex method to render PDF.
+ */
+async function sfSavePDF() {
+  sfShowBanner('Saving PDF to Salesforce Files…', 'loading');
+  try {
+    // ── STUB: Replace with real implementation ───────────────────────
+    // Option A: Use html2canvas + jsPDF to generate base64 PDF, then POST
+    // as ContentVersion with FirstPublishLocationId = workOrderId
+    //
+    // Option B: Call an Apex @AuraEnabled method that accepts the form
+    // data and generates the PDF server-side
+    //
+    // const pdfBase64 = await generatePDFBase64(); // your PDF generation
+    // const body = {
+    //   Title: 'Renovation_Checklist_' + new Date().toISOString().slice(0,10),
+    //   PathOnClient: 'renovation_checklist.pdf',
+    //   VersionData: pdfBase64,
+    //   FirstPublishLocationId: SF_CONFIG.workOrderId
+    // };
+    // await fetch(
+    //   `${SF_CONFIG.instanceUrl}/services/data/${SF_CONFIG.apiVersion}/sobjects/ContentVersion`,
+    //   { method:'POST', headers:{ Authorization:`Bearer ${SF_CONFIG.accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) }
+    // );
+    // sfShowBanner('✓ PDF saved to Salesforce Files', 'connected');
+    // ─────────────────────────────────────────────────────────────────
+    console.log('[SF] sfSavePDF() — not yet implemented');
+    sfShowBanner('SF PDF stub called — implement sfSavePDF()', 'error');
+  } catch (err) {
+    sfShowBanner('Error saving PDF: ' + err.message, 'error');
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   INTERNAL HELPERS — no changes needed below for SF integration
+══════════════════════════════════════════════════════════════════ */
+
+function sfShowBanner(msg, type) {
+  const b = document.getElementById('sfBanner');
+  b.textContent = msg;
+  b.className = 'sf-banner ' + type;
+}
+
+function populateField(id, value) {
+  if (!value) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = value;
+  el.classList.add('sf-populated');
+}
+
+function collectFormData() {
+  const checkIds = ['c1','c2','c2a','c2b','c2c','c2d','c2e','c2f','c3','c4',
+                    'c5','c5a','c5b','c5c','c5d','c5e','c5f','c5g','c5h','c5i','c5j',
+                    'c6','c7','c7a','c7b','c8','c9','c10'];
+  const checks = {};
+  checkIds.forEach(id => { checks[id] = !!(document.getElementById(id)||{}).checked; });
+  return {
+    firm: val('f_firm'), date: val('f_date'), loc: val('f_loc'),
+    desc: val('f_desc'), renov: val('f_renov'), workers: val('f_workers'),
+    tech: val('f_tech'), verify: val('f_verify'),
+    sigdate: val('f_sigdate'), nametitle: val('f_nametitle'),
+    signature: sigCanvas.toDataURL('image/png'),
+    checks
+  };
+}
+
+/* ── Signature pad ── */
+const sigCanvas = document.getElementById('sigCanvas');
+const ctx = sigCanvas.getContext('2d');
+function resizeCanvas() {
+  const w = sigCanvas.offsetWidth, h = 110;
+  sigCanvas.width = w * devicePixelRatio; sigCanvas.height = h * devicePixelRatio;
+  sigCanvas.style.height = h + 'px';
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+let drawing = false, lx = 0, ly = 0;
+function pos(e) {
+  const r = sigCanvas.getBoundingClientRect();
+  return e.touches ? { x: e.touches[0].clientX-r.left, y: e.touches[0].clientY-r.top }
+                   : { x: e.clientX-r.left, y: e.clientY-r.top };
+}
+sigCanvas.addEventListener('mousedown', e => { drawing=true; const p=pos(e); lx=p.x; ly=p.y; });
+sigCanvas.addEventListener('mousemove', e => { if(!drawing) return; const p=pos(e); ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(p.x,p.y); ctx.stroke(); lx=p.x; ly=p.y; });
+sigCanvas.addEventListener('mouseup', ()=>drawing=false);
+sigCanvas.addEventListener('mouseleave', ()=>drawing=false);
+sigCanvas.addEventListener('touchstart', e=>{ e.preventDefault(); drawing=true; const p=pos(e); lx=p.x; ly=p.y; },{passive:false});
+sigCanvas.addEventListener('touchmove', e=>{ e.preventDefault(); if(!drawing) return; const p=pos(e); ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(p.x,p.y); ctx.stroke(); lx=p.x; ly=p.y; },{passive:false});
+sigCanvas.addEventListener('touchend', ()=>drawing=false);
+function clearSig() { ctx.clearRect(0,0,sigCanvas.width,sigCanvas.height); }
+
+/* ── Helpers ── */
+function val(id) { return (document.getElementById(id)||{}).value || ''; }
+function setText(id, text) { const el=document.getElementById(id); if(el) el.textContent=text; }
+function setBox(docId, checked) {
+  const el = document.getElementById(docId);
+  if (!el) return;
+  el.textContent = checked ? '✓' : '';
+  el.classList.toggle('checked', checked);
+}
+function formatDate(v) {
+  if (!v) return '';
+  const [y,m,d] = v.split('-');
+  return `${m}/${d}/${y}`;
+}
+
+/* ── Preview builder ── */
+function showPreview() {
+  setText('d_firm', val('f_firm'));
+  setText('d_dateloc', [formatDate(val('f_date')), val('f_loc')].filter(Boolean).join('   '));
+  setText('d_desc', val('f_desc'));
+  setText('d_renov', val('f_renov'));
+  setText('d_workers', val('f_workers'));
+  setText('d_tech', val('f_tech'));
+  setText('d_verify', val('f_verify'));
+  setText('d_sigdate', formatDate(val('f_sigdate')));
+  setText('d_nametitle', val('f_nametitle'));
+
+  const ids = ['c1','c2','c2a','c2b','c2c','c2d','c2e','c2f','c3','c4',
+               'c5','c5a','c5b','c5c','c5d','c5e','c5f','c5g','c5h','c5i','c5j',
+               'c6','c7','c7a','c7b','c8','c9','c10'];
+  ids.forEach(id => setBox('d_'+id, !!(document.getElementById(id)||{}).checked));
+
+  const blank = document.createElement('canvas');
+  blank.width = sigCanvas.width; blank.height = sigCanvas.height;
+  const img = document.getElementById('d_sig');
+  img.src = sigCanvas.toDataURL() !== blank.toDataURL() ? sigCanvas.toDataURL('image/png') : '';
+
+  document.getElementById('formView').style.display = 'none';
+  document.getElementById('printView').style.display = 'block';
+  window.scrollTo(0,0);
+}
+
+function showForm() {
+  document.getElementById('printView').style.display = 'none';
+  document.getElementById('formView').style.display = 'block';
+  window.scrollTo(0,0);
+}
+
+/* ── Google Places Autocomplete ── */
+function initPlacesAutocomplete() {
+  const input = document.getElementById('f_loc');
+  if (!input || typeof google === 'undefined') return;
+  const ac = new google.maps.places.Autocomplete(input, { types: ['address'], componentRestrictions: { country: 'us' } });
+  ac.addListener('place_changed', () => {
+    const place = ac.getPlace();
+    if (place && place.formatted_address) input.value = place.formatted_address;
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initPlacesAutocomplete);
+} else {
+  initPlacesAutocomplete();
+}
+
+/* ── Salesforce init (runs on page load if enabled) ── */
+(async function initSalesforce() {
+  if (!SF_CONFIG.enabled) return;
+
+  // Show SF UI elements
+  document.body.classList.add('sf-enabled');
+  document.getElementById('sfIndicator').style.display = 'block';
+  document.getElementById('btnSfPdf').style.display = 'block';
+
+  // Authenticate then load work order data
+  const authed = await sfAuthenticate();
+  if (authed) {
+    await sfLoadWorkOrder();
+  }
+})();
+</script>
+
+</body>
+</html>
